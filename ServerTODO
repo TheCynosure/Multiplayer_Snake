@@ -1,0 +1,6 @@
+Fixing the Server
+1. Use a single UDP Port to handle all traffic and instead record the address and port of each of the clients that contact the server.
+2. Rewrite UDP_Comm to be a simple way to message the server from the clients
+3. Make it so the server waits for data from all parties before pushing out new data.
+4. Make the game server decide the timing on all the computers.
+  ^ Do this using a similiar refresh method to the snake game.
