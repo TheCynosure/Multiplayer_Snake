@@ -1,5 +1,6 @@
-import java.io.IOException;
+import java.awt.*;
 import java.net.*;
+import java.util.ArrayList;
 
 /**
  * Created by jack on 6/30/17.
@@ -14,7 +15,13 @@ public class Client {
         try {
             conn = new UDP_Conn(InetAddress.getByName(hostname), port);
             DatagramSocket socket = new DatagramSocket(4999);
-            conn.sendMessage(socket, "Hello server!");
+
+            ArrayList<Point> snake = new ArrayList<>();
+            snake.add(new Point(-1, -1));
+
+            conn.sendMessage(socket, new SnakeData(snake, 1,1,1));
+            conn.sendMessage(socket, new SnakeData(snake, 0, 1, 5000));
+
             socket.close();
         } catch (SocketException | UnknownHostException e) {
             e.printStackTrace();

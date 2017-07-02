@@ -4,23 +4,36 @@ import java.awt.event.KeyEvent;
 import java.awt.event.KeyListener;
 import java.awt.image.BufferedImage;
 import java.io.*;
-import java.net.DatagramSocket;
-import java.net.InetAddress;
+import java.lang.reflect.Method;
+import java.net.*;
+import java.security.AccessController;
+import java.security.PrivilegedAction;
 import java.util.ArrayList;
 import java.util.Random;
+import java.util.concurrent.Callable;
 
 /**
  * Created by jack on 6/30/17.
  */
-public class Snake extends JApplet implements KeyListener {
+public class Snake extends JFrame implements KeyListener {
     int pixelSize = 25;
-    int gridSize = 20;
+    int gridSize = 40;
     int vx, vy;
     Random random;
     ArrayList<Point> snake;
     Point food;
     long pastTime, timeSinceUpdate, speed;
+
+    public static void main(String[] args) {
+        //Turned into JFrame and added these!
+        Snake snake = new Snake();
+        snake.init();
+    }
+
     public void init() {
+        //Enable Multiplayer.
+        online = true;
+
         setSize(gridSize * pixelSize, gridSize * pixelSize);
         setFocusable(true);
         addKeyListener(this);
@@ -34,6 +47,15 @@ public class Snake extends JApplet implements KeyListener {
         pastTime = System.currentTimeMillis();
         timeSinceUpdate = 0;
         speed = 50;
+
+        if(online) {
+            establishConnection();
+            System.out.println("Waiting for Multiplayer Game");
+            waitForGameStart();
+            System.out.println("Game is beginning...");
+        }
+
+        setVisible(true);
         spawnFood();
         refresh();
     }
@@ -46,9 +68,18 @@ public class Snake extends JApplet implements KeyListener {
         h.fillRect(0,0,getWidth(),getHeight());
         h.setColor(Color.ORANGE);
         h.fillOval(food.x * pixelSize, food.y * pixelSize, pixelSize, pixelSize);
-        h.setColor(Color.GREEN);
-        for(Point p: snake) {
-            h.fillRect(p.x * pixelSize, p.y * pixelSize, pixelSize, pixelSize);
+        if(online) {
+            for(SnakeData snakeData: playerData) {
+                h.setColor(snakeData.color);
+                for (Point p : snakeData.snake) {
+                    h.fillRect(p.x * pixelSize, p.y * pixelSize, pixelSize, pixelSize);
+                }
+            }
+        } else {
+            h.setColor(Color.GREEN);
+            for (Point p : snake) {
+                h.fillRect(p.x * pixelSize, p.y * pixelSize, pixelSize, pixelSize);
+            }
         }
         g.drawImage(bufferedImage, 0, 0, null);
         refresh();
@@ -88,9 +119,13 @@ public class Snake extends JApplet implements KeyListener {
         long deltaTime = System.currentTimeMillis() - pastTime;
         pastTime = System.currentTimeMillis();
         timeSinceUpdate += deltaTime;
-        if(timeSinceUpdate > speed) {
+        //Added null check clause here for multiplayer stopping the move command.
+        if(timeSinceUpdate > speed && !online) {
             move();
             timeSinceUpdate -= speed;
+        } else if(online) {
+            sendData();
+            processData();
         }
         repaint();
     }
@@ -137,81 +172,51 @@ public class Snake extends JApplet implements KeyListener {
      --------------------------------------------------
      */
 
-    ByteArrayOutputStream byteArrayOutputStream;
-    ObjectOutputStream objectOutputStream;
-    ObjectInputStream objectInputStream;
-    ByteArrayInputStream byteArrayInputStream;
-    UDP_Conn connToServer;
-    DatagramSocket socket;
-    int numPlayers = 0;
-    byte[] inputData;
+    private DatagramSocket socket;
+    private UDP_Conn connToServer;
+    private ArrayList<SnakeData> playerData;
+    private boolean online = false;
 
-    public void setupMultiplayer() {
-        byteArrayOutputStream = new ByteArrayOutputStream();
-        try {
-            byteArrayInputStream = new ByteArrayInputStream(inputData);
-            objectInputStream = new ObjectInputStream(byteArrayInputStream);
-            objectOutputStream = new ObjectOutputStream(byteArrayOutputStream);
-            connToServer = new UDP_Conn(InetAddress.getByName("WhyYouLookingAtMe"), 5000);
-            socket = new DatagramSocket(4999);
-            //SETUP CONNECTION WITH SERVER
-            String message = "Hello there server, I'm Jack";
-            connToServer.sendMessage(socket,  message.getBytes());
-        } catch (IOException e) {
-            e.printStackTrace();
+    public void establishConnection() {
+        if(socket == null) {
+            playerData = new ArrayList<>();
+            try {
+                socket = new DatagramSocket(4999);
+                connToServer = new UDP_Conn(InetAddress.getByName("jack-mint"), 5000);
+                //Get on server list of connections
+                connToServer.sendMessage(socket, new SnakeData(null, 0, 0, 0));
+            } catch (SocketException | UnknownHostException e) {
+                e.printStackTrace();
+            }
         }
     }
 
-    public byte[] getSnakeMsg() {
-        SnakeData snakeData = new SnakeData(snake, vx, vy);
-        byteArrayOutputStream.reset();
-        try {
-            objectOutputStream.writeObject(snakeData);
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-        return byteArrayOutputStream.toByteArray();
+    public void waitForGameStart() {
+        SnakeData data;
+        do {
+            data = connToServer.receiveMessage(socket);
+        } while(!data.GamePlaying);
     }
 
     public void sendData() {
-        connToServer.sendMessage(socket, getSnakeMsg());
+        connToServer.sendMessage(socket, new SnakeData(snake, vx, vy, 0));
     }
 
+    //Receive data from server and display it.
+    public void processData() {
+        playerData.clear();
+        int playerNum = 0;
+        do {
+            SnakeData data = connToServer.receiveMessage(socket);
+            playerData.add(data);
+            playerNum = data.playerAmount;
+        } while(playerData.size() < playerNum);
+        food = playerData.get(0).food;
+    }
 
     @Override
     protected void finalize() throws Throwable {
         super.finalize();
         socket.close();
-        objectOutputStream.close();
-        byteArrayOutputStream.close();
-    }
-
-    public int GameBegun() {
-        String response = "";
-        if((response = connToServer.receiveMessage(socket)).contains("GAME START")) {
-            String[] responseParts = response.split(" ");
-            numPlayers = Integer.parseInt(responseParts[2]);
-            return numPlayers;
-        }
-        return -1;
-    }
-
-    //RECEIVING DATA METHODS
-
-    //TODO PARSE INCOMING DATA
-    public void receiveData() {
-        int receivedPlayers = 0;
-        while(receivedPlayers < numPlayers) {
-            String recData = connToServer.receiveMessage(socket);
-            inputData = recData.getBytes();
-            try {
-                SnakeData data = (SnakeData) objectInputStream.readObject();
-                for(Point point: data.snake) {
-                    snake.add(point);
-                }
-            } catch (IOException | ClassNotFoundException e) {
-                e.printStackTrace();
-            }
-        }
     }
 }
