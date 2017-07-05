@@ -15,7 +15,7 @@ public class Server {
     java.util.List<UDP_Conn> connList = Collections.synchronizedList(new ArrayList<UDP_Conn>());
     DatagramSocket socket;
     boolean gameStarted = false;
-    SnakeData[] snakeDatas;
+    HashMap<String, SnakeData> snakeDatas;
 
     Random random = new Random();
     Point serverFoodPos;
@@ -33,8 +33,7 @@ public class Server {
             e.printStackTrace();
         }
     }
-
-    //TODO: Client instantly dies.
+    
     public Server() throws SocketException {
         runCommandThread();
 
@@ -47,12 +46,12 @@ public class Server {
         socket.setSoTimeout(0);
         System.out.println("Game is beginning...");
         genFoodPos();
-        snakeDatas = new SnakeData[connList.size()];
-        for (int i = 0; i < snakeDatas.length; i++) {
-            snakeDatas[i] = new SnakeData(null, 0, 0, 0, Color.BLACK, null);
-        }
+        snakeDatas = new HashMap<>();
+        
         sendStartPackets();
 
+        spawnAsyncReceiveThread();
+        
         pastTime = System.currentTimeMillis();
         timeSinceUpdate = 0;
         speed = 200;
@@ -63,43 +62,55 @@ public class Server {
             timeSinceUpdate += deltaTime;
             //Added null check clause here for multiplayer stopping the move command.
             if(timeSinceUpdate > speed) {
-                getDataFromClients();
                 checkCollision();
                 sendDataToClients();
             }
         }
    }
-
-   private void getDataFromClients() {
-       for(int i = 0; i < connList.size(); i++) {
-           snakeDatas[i] = connList.get(i).receiveMessage(socket);
-           if(snakeDatas[i].ownerAddress == null) {
-               System.out.println(connList.get(i).addressTo.getHostName() + " sent me a null OwnerAddress, attempting to reassign it.");
-               snakeDatas[i].ownerAddress = connList.get(i).addressTo;
+   
+   private void spawnAsyncReceiveThread() {
+       Thread thread = new Thread(new Runnable() {
+           @Override
+           public void run() {
+               try {
+                   socket.setSoTimeout((int) (speed / connList.size()) + 1);
+               } catch (SocketException e) {
+                   e.printStackTrace();
+               }
+               do {
+                   SnakeData data = connList.get(0).receiveMessage(socket);
+                   if(data != null && data.ownerAddress != null) {
+                       snakeDatas.get(data.ownerAddress).vx = data.vx;
+                       snakeDatas.get(data.ownerAddress).vy = data.vy;
+                   }
+               } while (true);
            }
-       }
+       });
+       thread.start();
    }
 
    public void checkCollision() {
-       for (int i = 0; i < snakeDatas.length; i++) {
-           Point head = new Point(snakeDatas[i].snake.get(snakeDatas[i].snake.size() - 1).x + snakeDatas[i].vx, snakeDatas[i].snake.get(snakeDatas[i].snake.size() - 1).y + snakeDatas[i].vy);
-           snakeDatas[i].snake.add(head);
+       for (SnakeData data : snakeDatas.values()) {
+           int headIndex = data.snake.size() - 1;
+           Point head = new Point(data.snake.get(headIndex).x + data.vx, data.snake.get(headIndex).y + data.vy);
+           data.snake.add(head);
            if(!head.equals(serverFoodPos)) {
-               snakeDatas[i].snake.remove(0);
+               data.snake.remove(0);
            } else {
                genFoodPos();
            }
 
-           snakeDatas[i].GamePlaying = !(head.x < 0 || head.x > gridSize || head.y < 0 || head.y > gridSize || bodyCollision(head, i));
+           data.GamePlaying = !(head.x < 0 || head.x > gridSize || head.y < 0 || head.y > gridSize || bodyCollision(head, data.ownerAddress));
        }
    }
 
-   private boolean bodyCollision(Point currentSnakeHead, int snakeIndex) {
-       for (int i = 0; i < snakeDatas.length; i++) {
-           for (int j = 0; j < snakeDatas[i].snake.size(); j++) {
-               boolean isColliding = snakeDatas[i].snake.get(j) == currentSnakeHead;
-               if(i != snakeIndex || (j != snakeDatas[i].snake.size() - 1))
-                    return isColliding;
+   private boolean bodyCollision(Point currentSnakeHead, String headSnake) {
+       for (SnakeData data : snakeDatas.values()) {
+           ArrayList<Point> currentSnake = data.snake;
+           for(int i = 0; i < currentSnake.size(); i++) {
+               boolean isColliding = currentSnake.get(i).equals(currentSnakeHead);
+               if(!data.ownerAddress.equals(headSnake) || i != currentSnake.size() - 1)
+                   return isColliding;
                return false;
            }
        }
@@ -109,18 +120,19 @@ public class Server {
    private void sendDataToClients() {
        for(int i = 0; i < connList.size(); i++) {
            //Send every connection the data for all players
-           snakeDatas[i].food = serverFoodPos;
-           for(SnakeData snakeData: snakeDatas) {
+           String inet = connList.get(i).addressTo.getHostName();
+           snakeDatas.get(inet).food = serverFoodPos;
+           for(SnakeData snakeData: snakeDatas.values()) {
                snakeData.color = Color.RED;
                boolean beforeGamePlaying = snakeData.GamePlaying;
-               snakeData.GamePlaying = snakeDatas[i].GamePlaying;
+               snakeData.GamePlaying = snakeDatas.get(inet).GamePlaying;
                connList.get(i).sendMessage(socket, snakeData);
                snakeData.GamePlaying = beforeGamePlaying;
            }
        }
        //Remove Dead Players
        for (int i = 0; i < connList.size(); i++) {
-           if(!snakeDatas[i].GamePlaying) {
+           if(!snakeDatas.get(connList.get(i).addressTo.getHostName()).GamePlaying) {
                connList.remove(i);
                i--;
            }
@@ -146,17 +158,22 @@ public class Server {
        //Send packets that startGame to all players
        SnakeData startGamePacket = null;
        try {
-           startGamePacket = new SnakeData(null, 0, 0, 0, Color.BLACK, InetAddress.getLocalHost());
+           startGamePacket = new SnakeData(null, 0, 0, 0, Color.BLACK, InetAddress.getLocalHost().getHostName());
        } catch (UnknownHostException e) {
            e.printStackTrace();
        }
        for (int i = 0; i < connList.size(); i++) {
            connList.get(i).sendMessage(socket, startGamePacket);
-           snakeDatas[i].snake = new ArrayList<>();
-           snakeDatas[i].snake.add(new Point(random.nextInt(gridSize), random.nextInt(gridSize)));
-           snakeDatas[i].food = serverFoodPos;
-           snakeDatas[i].playerAmount = connList.size();
-           snakeDatas[i].gridSize = gridSize;
+           String ownerAddress = connList.get(i).addressTo.getHostName();
+           if(ownerAddress == null)
+               System.out.println("NULL OWNER ADDRESS! @StartTime");
+           snakeDatas.put(ownerAddress, new SnakeData(0, 0, ownerAddress));
+
+           snakeDatas.get(ownerAddress).snake = new ArrayList<>();
+           snakeDatas.get(ownerAddress).snake.add(new Point(random.nextInt(gridSize), random.nextInt(gridSize)));
+           snakeDatas.get(ownerAddress).food = serverFoodPos;
+           snakeDatas.get(ownerAddress).playerAmount = connList.size();
+           snakeDatas.get(ownerAddress).gridSize = gridSize;
        }
        sendDataToClients();
    }

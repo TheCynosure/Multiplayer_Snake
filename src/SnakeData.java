@@ -16,13 +16,20 @@ public class SnakeData implements Serializable {
         protected ArrayList<Point> snake;
         protected int vx, vy, playerAmount, gridSize;
         protected Color color;
-        protected InetAddress ownerAddress;
+        protected String ownerAddress;
 
-        public SnakeData(ArrayList<Point> snake, int vx, int vy, int playerAmount, Color color, InetAddress ownerAddress) {
+        public SnakeData(ArrayList<Point> snake, int vx, int vy, int playerAmount, Color color, String ownerAddress) {
             this.snake = snake;
             this.vx = vx;
             this.vy = vy;
             this.playerAmount = playerAmount;
             this.color = color;
+            this.ownerAddress = ownerAddress;
+        }
+
+        public SnakeData(int vx, int vy,  String ownerAddress) {
+            this.vx = vx;
+            this.vy = vy;
+            this.ownerAddress = ownerAddress;
         }
 }

@@ -25,7 +25,6 @@ public class Snake extends JFrame implements KeyListener {
     ArrayList<Point> snake;
     Point food;
     long pastTime, timeSinceUpdate, speed;
-    boolean painting = false;
 
     public static void main(String[] args) {
         //Turned into JFrame and added these!
@@ -66,7 +65,7 @@ public class Snake extends JFrame implements KeyListener {
 
     @Override
     public void paint(Graphics g) {
-        painting = true;
+        paintLock = true;
         BufferedImage bufferedImage = new BufferedImage(getWidth(), getHeight(), BufferedImage.TYPE_INT_ARGB);
         Graphics h = bufferedImage.getGraphics();
         h.setColor(Color.WHITE);
@@ -74,9 +73,7 @@ public class Snake extends JFrame implements KeyListener {
         h.setColor(Color.ORANGE);
         h.fillOval(food.x * pixelSize, food.y * pixelSize, pixelSize, pixelSize);
         if(online) {
-            Iterator iter = playerData.iterator();
-            while (iter.hasNext()) {
-                SnakeData snakeData = ((SnakeData) iter.next());
+            for(SnakeData snakeData: playerData) {
                 h.setColor(snakeData.color);
                 for (Point p : snakeData.snake) {
                     h.fillRect(p.x * pixelSize, p.y * pixelSize, pixelSize, pixelSize);
@@ -89,7 +86,7 @@ public class Snake extends JFrame implements KeyListener {
             }
         }
         g.drawImage(bufferedImage, 0, 0, null);
-        painting = false;
+        paintLock = false;
     }
 
     public Point getHead() {
@@ -131,11 +128,11 @@ public class Snake extends JFrame implements KeyListener {
             move();
             timeSinceUpdate -= speed;
         } else if(online) {
-            while (painting) {}
-            sendData();
             processData();
         }
         repaint();
+        while (!paintLock) {}
+        while (paintLock) {}
     }
 
     @Override
@@ -163,6 +160,7 @@ public class Snake extends JFrame implements KeyListener {
                 vx = 1;
                 break;
         }
+        sendData();
     }
 
     @Override
@@ -182,17 +180,18 @@ public class Snake extends JFrame implements KeyListener {
 
     private DatagramSocket socket;
     private UDP_Conn connToServer;
-    private java.util.List playerData;
+    private ArrayList<SnakeData> playerData;
     private boolean online = true;
+    private boolean paintLock = false;
 
     public void establishConnection() {
         if(socket == null) {
-            playerData = Collections.synchronizedList(new ArrayList<SnakeData>());
+            playerData = new ArrayList<>();
             try {
                 socket = new DatagramSocket(4999);
                 connToServer = new UDP_Conn(InetAddress.getByName("jack-mint"), 5000);
                 //Get on server list of connections
-                connToServer.sendMessage(socket, new SnakeData(null, 0, 0, 0, Color.BLACK, InetAddress.getLocalHost()));
+                connToServer.sendMessage(socket, new SnakeData(null, 0, 0, 0, Color.BLACK, InetAddress.getLocalHost().getHostName()));
             } catch (SocketException | UnknownHostException e) {
                 e.printStackTrace();
             }
@@ -208,7 +207,7 @@ public class Snake extends JFrame implements KeyListener {
 
     public void sendData() {
         try {
-            connToServer.sendMessage(socket, new SnakeData(snake, vx, vy, 0, Color.GREEN, InetAddress.getLocalHost()));
+            connToServer.sendMessage(socket, new SnakeData(vx, vy, InetAddress.getLocalHost().getHostName()));
         } catch (UnknownHostException e) {
             e.printStackTrace();
         }
@@ -221,21 +220,13 @@ public class Snake extends JFrame implements KeyListener {
         boolean dead;
         do {
             SnakeData data = connToServer.receiveMessage(socket);
-            try {
-                if(data.ownerAddress != null && data.ownerAddress.equals(InetAddress.getLocalHost())) {
-                    snake = data.snake;
-                    data.snake.clear();
-                }
-                playerData.add(data);
-            } catch (UnknownHostException e) {
-                e.printStackTrace();
-            }
+            playerData.add(data);
             playerNum = data.playerAmount;
             dead = !data.GamePlaying;
             food = data.food;
         } while(playerData.size() < playerNum);
-        if(((SnakeData)playerData.get(0)).gridSize != gridSize) {
-            gridSize = ((SnakeData)playerData.get(0)).gridSize;
+        if(playerData.get(0).gridSize != gridSize) {
+            gridSize = playerData.get(0).gridSize;
             setSize(pixelSize * gridSize, pixelSize * gridSize);
         }
         if(dead) {

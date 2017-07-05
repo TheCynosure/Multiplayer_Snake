@@ -42,9 +42,7 @@ public class UDP_Conn {
                 DatagramPacket incomingPacket = new DatagramPacket(incomingData, incomingData.length);
                 socket.receive(incomingPacket);
                 data = SerializationUtils.deserialize(incomingPacket.getData());
-            } catch (IOException e) {
-                e.printStackTrace();
-            }
+            } catch (IOException e) {}
         }
         return data;
     }
