@@ -9,6 +9,8 @@ import java.net.*;
 import java.security.AccessController;
 import java.security.PrivilegedAction;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Iterator;
 import java.util.Random;
 import java.util.concurrent.Callable;
 
@@ -17,12 +19,13 @@ import java.util.concurrent.Callable;
  */
 public class Snake extends JFrame implements KeyListener {
     int pixelSize = 25;
-    int gridSize = 40;
+    int gridSize;
     int vx, vy;
     Random random;
     ArrayList<Point> snake;
     Point food;
     long pastTime, timeSinceUpdate, speed;
+    boolean painting = false;
 
     public static void main(String[] args) {
         //Turned into JFrame and added these!
@@ -31,37 +34,39 @@ public class Snake extends JFrame implements KeyListener {
     }
 
     public void init() {
-        //Enable Multiplayer.
-        online = true;
-
+        gridSize = 40;
         setSize(gridSize * pixelSize, gridSize * pixelSize);
         setFocusable(true);
         addKeyListener(this);
         snake = new ArrayList<>();
-        snake.add(new Point(11,10));
-        snake.add(new Point(12, 10));
-        snake.add(new Point(13, 10));
+        snake.add(new Point(10, 11));
+        snake.add(new Point(11, 11));
+        snake.add(new Point(12, 11));
         vx = 1;
         vy = 0;
         random = new Random();
         pastTime = System.currentTimeMillis();
         timeSinceUpdate = 0;
         speed = 50;
-
         if(online) {
             establishConnection();
             System.out.println("Waiting for Multiplayer Game");
             waitForGameStart();
             System.out.println("Game is beginning...");
+            processData();
+        } else {
+            spawnFood();
         }
 
         setVisible(true);
-        spawnFood();
-        refresh();
+        while(true) {
+            refresh();
+        }
     }
 
     @Override
     public void paint(Graphics g) {
+        painting = true;
         BufferedImage bufferedImage = new BufferedImage(getWidth(), getHeight(), BufferedImage.TYPE_INT_ARGB);
         Graphics h = bufferedImage.getGraphics();
         h.setColor(Color.WHITE);
@@ -69,7 +74,9 @@ public class Snake extends JFrame implements KeyListener {
         h.setColor(Color.ORANGE);
         h.fillOval(food.x * pixelSize, food.y * pixelSize, pixelSize, pixelSize);
         if(online) {
-            for(SnakeData snakeData: playerData) {
+            Iterator iter = playerData.iterator();
+            while (iter.hasNext()) {
+                SnakeData snakeData = ((SnakeData) iter.next());
                 h.setColor(snakeData.color);
                 for (Point p : snakeData.snake) {
                     h.fillRect(p.x * pixelSize, p.y * pixelSize, pixelSize, pixelSize);
@@ -82,7 +89,7 @@ public class Snake extends JFrame implements KeyListener {
             }
         }
         g.drawImage(bufferedImage, 0, 0, null);
-        refresh();
+        painting = false;
     }
 
     public Point getHead() {
@@ -124,6 +131,7 @@ public class Snake extends JFrame implements KeyListener {
             move();
             timeSinceUpdate -= speed;
         } else if(online) {
+            while (painting) {}
             sendData();
             processData();
         }
@@ -169,22 +177,22 @@ public class Snake extends JFrame implements KeyListener {
             -- MULTIPLAYER METHODS AND STUFF --
 
 
-     --------------------------------------------------
+    ---------------------------------------------------
      */
 
     private DatagramSocket socket;
     private UDP_Conn connToServer;
-    private ArrayList<SnakeData> playerData;
-    private boolean online = false;
+    private java.util.List playerData;
+    private boolean online = true;
 
     public void establishConnection() {
         if(socket == null) {
-            playerData = new ArrayList<>();
+            playerData = Collections.synchronizedList(new ArrayList<SnakeData>());
             try {
                 socket = new DatagramSocket(4999);
                 connToServer = new UDP_Conn(InetAddress.getByName("jack-mint"), 5000);
                 //Get on server list of connections
-                connToServer.sendMessage(socket, new SnakeData(null, 0, 0, 0));
+                connToServer.sendMessage(socket, new SnakeData(null, 0, 0, 0, Color.BLACK, InetAddress.getLocalHost()));
             } catch (SocketException | UnknownHostException e) {
                 e.printStackTrace();
             }
@@ -199,19 +207,42 @@ public class Snake extends JFrame implements KeyListener {
     }
 
     public void sendData() {
-        connToServer.sendMessage(socket, new SnakeData(snake, vx, vy, 0));
+        try {
+            connToServer.sendMessage(socket, new SnakeData(snake, vx, vy, 0, Color.GREEN, InetAddress.getLocalHost()));
+        } catch (UnknownHostException e) {
+            e.printStackTrace();
+        }
     }
 
     //Receive data from server and display it.
     public void processData() {
         playerData.clear();
-        int playerNum = 0;
+        int playerNum;
+        boolean dead;
         do {
             SnakeData data = connToServer.receiveMessage(socket);
-            playerData.add(data);
+            try {
+                if(data.ownerAddress != null && data.ownerAddress.equals(InetAddress.getLocalHost())) {
+                    snake = data.snake;
+                    data.snake.clear();
+                }
+                playerData.add(data);
+            } catch (UnknownHostException e) {
+                e.printStackTrace();
+            }
             playerNum = data.playerAmount;
+            dead = !data.GamePlaying;
+            food = data.food;
         } while(playerData.size() < playerNum);
-        food = playerData.get(0).food;
+        if(((SnakeData)playerData.get(0)).gridSize != gridSize) {
+            gridSize = ((SnakeData)playerData.get(0)).gridSize;
+            setSize(pixelSize * gridSize, pixelSize * gridSize);
+        }
+        if(dead) {
+            System.out.println("Im Dead");
+            online = false;
+            init();
+        }
     }
 
     @Override

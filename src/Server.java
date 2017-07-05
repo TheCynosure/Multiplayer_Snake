@@ -1,3 +1,5 @@
+import com.sun.corba.se.impl.transport.ByteBufferPoolImpl;
+
 import java.awt.*;
 import java.io.IOException;
 import java.lang.reflect.Array;
@@ -9,9 +11,20 @@ import java.util.*;
  */
 public class Server {
     final int SERVER_PORT = 5000;
+    int gridSize = 40;
     java.util.List<UDP_Conn> connList = Collections.synchronizedList(new ArrayList<UDP_Conn>());
     DatagramSocket socket;
     boolean gameStarted = false;
+    SnakeData[] snakeDatas;
+
+    Random random = new Random();
+    Point serverFoodPos;
+
+    long timeSinceUpdate, speed, pastTime;
+
+    public void genFoodPos() {
+        serverFoodPos = new Point(random.nextInt(gridSize), random.nextInt(gridSize));
+    }
 
     public static void main(String[] args) {
         try {
@@ -21,20 +34,97 @@ public class Server {
         }
     }
 
+    //TODO: Client instantly dies.
     public Server() throws SocketException {
         runCommandThread();
+
         socket = new DatagramSocket(SERVER_PORT);
         //Set a short timeout (ms)
         socket.setSoTimeout(500);
         waitForConnections();
 
+        //Infinite Timeout
+        socket.setSoTimeout(0);
         System.out.println("Game is beginning...");
+        genFoodPos();
+        snakeDatas = new SnakeData[connList.size()];
+        for (int i = 0; i < snakeDatas.length; i++) {
+            snakeDatas[i] = new SnakeData(null, 0, 0, 0, Color.BLACK, null);
+        }
         sendStartPackets();
 
-        //TODO: Send out starting positions in the starting packets.
-        //TODO: While loop receiving all the data from players.
-        //TODO: Checking for collision between players and checking if they are dead.
-        //TODO: Respond to players by sending them all the snake data. -- Make sure to sign it as them.
+        pastTime = System.currentTimeMillis();
+        timeSinceUpdate = 0;
+        speed = 200;
+
+        while (connList.size() > 0) {
+            long deltaTime = System.currentTimeMillis() - pastTime;
+            pastTime = System.currentTimeMillis();
+            timeSinceUpdate += deltaTime;
+            //Added null check clause here for multiplayer stopping the move command.
+            if(timeSinceUpdate > speed) {
+                getDataFromClients();
+                checkCollision();
+                sendDataToClients();
+            }
+        }
+   }
+
+   private void getDataFromClients() {
+       for(int i = 0; i < connList.size(); i++) {
+           snakeDatas[i] = connList.get(i).receiveMessage(socket);
+           if(snakeDatas[i].ownerAddress == null) {
+               System.out.println(connList.get(i).addressTo.getHostName() + " sent me a null OwnerAddress, attempting to reassign it.");
+               snakeDatas[i].ownerAddress = connList.get(i).addressTo;
+           }
+       }
+   }
+
+   public void checkCollision() {
+       for (int i = 0; i < snakeDatas.length; i++) {
+           Point head = new Point(snakeDatas[i].snake.get(snakeDatas[i].snake.size() - 1).x + snakeDatas[i].vx, snakeDatas[i].snake.get(snakeDatas[i].snake.size() - 1).y + snakeDatas[i].vy);
+           snakeDatas[i].snake.add(head);
+           if(!head.equals(serverFoodPos)) {
+               snakeDatas[i].snake.remove(0);
+           } else {
+               genFoodPos();
+           }
+
+           snakeDatas[i].GamePlaying = !(head.x < 0 || head.x > gridSize || head.y < 0 || head.y > gridSize || bodyCollision(head, i));
+       }
+   }
+
+   private boolean bodyCollision(Point currentSnakeHead, int snakeIndex) {
+       for (int i = 0; i < snakeDatas.length; i++) {
+           for (int j = 0; j < snakeDatas[i].snake.size(); j++) {
+               boolean isColliding = snakeDatas[i].snake.get(j) == currentSnakeHead;
+               if(i != snakeIndex || (j != snakeDatas[i].snake.size() - 1))
+                    return isColliding;
+               return false;
+           }
+       }
+       return false;
+   }
+
+   private void sendDataToClients() {
+       for(int i = 0; i < connList.size(); i++) {
+           //Send every connection the data for all players
+           snakeDatas[i].food = serverFoodPos;
+           for(SnakeData snakeData: snakeDatas) {
+               snakeData.color = Color.RED;
+               boolean beforeGamePlaying = snakeData.GamePlaying;
+               snakeData.GamePlaying = snakeDatas[i].GamePlaying;
+               connList.get(i).sendMessage(socket, snakeData);
+               snakeData.GamePlaying = beforeGamePlaying;
+           }
+       }
+       //Remove Dead Players
+       for (int i = 0; i < connList.size(); i++) {
+           if(!snakeDatas[i].GamePlaying) {
+               connList.remove(i);
+               i--;
+           }
+       }
    }
 
    private void waitForConnections() {
@@ -54,11 +144,21 @@ public class Server {
 
    private void sendStartPackets() {
        //Send packets that startGame to all players
-       SnakeData startGamePacket = new SnakeData(null, 0, 0, 0);
-       startGamePacket.GamePlaying = true;
-       for(UDP_Conn udpConn: connList) {
-           udpConn.sendMessage(socket, startGamePacket);
+       SnakeData startGamePacket = null;
+       try {
+           startGamePacket = new SnakeData(null, 0, 0, 0, Color.BLACK, InetAddress.getLocalHost());
+       } catch (UnknownHostException e) {
+           e.printStackTrace();
        }
+       for (int i = 0; i < connList.size(); i++) {
+           connList.get(i).sendMessage(socket, startGamePacket);
+           snakeDatas[i].snake = new ArrayList<>();
+           snakeDatas[i].snake.add(new Point(random.nextInt(gridSize), random.nextInt(gridSize)));
+           snakeDatas[i].food = serverFoodPos;
+           snakeDatas[i].playerAmount = connList.size();
+           snakeDatas[i].gridSize = gridSize;
+       }
+       sendDataToClients();
    }
 
    private void runCommandThread() {
